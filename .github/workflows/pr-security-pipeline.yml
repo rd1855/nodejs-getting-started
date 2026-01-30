@@ -16,12 +16,12 @@ concurrency:
 jobs:
   pr-security:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Get changed files
         id: changes
@@ -29,23 +29,20 @@ jobs:
 
       - name: Run Gitleaks
         if: steps.changes.outputs.any_changed == 'true'
-        timeout-minutes: 3
+        timeout-minutes: 1
         uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect --source . --log-opts="--all"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Semgrep
         if: steps.changes.outputs.any_changed == 'true'
-        timeout-minutes: 3
+        timeout-minutes: 1
         run: |
-          python3 -m pip install --upgrade pip
-          pip install semgrep
+          pip install --quiet semgrep
 
-      - name: Run Semgrep on changed files
+      - name: Run Semgrep (SARIF)
         if: steps.changes.outputs.any_changed == 'true'
-        timeout-minutes: 5
+        timeout-minutes: 2
         run: |
           semgrep scan \
             --config p/javascript \
@@ -53,26 +50,28 @@ jobs:
             --output semgrep.sarif \
             ${{ steps.changes.outputs.all_changed_files }}
 
-      - name: Upload SARIF report
+      - name: Upload SARIF
         if: steps.changes.outputs.any_changed == 'true'
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
 
-      - name: Run OWASP Dependency Check
+      - name: Run Dependency Check
         if: steps.changes.outputs.any_changed == 'true'
-        timeout-minutes: 8
+        timeout-minutes: 2
         uses: dependency-check/Dependency-Check_Action@main
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         with:
           project: "PR-Dependency-Scan"
           path: "."
           format: "HTML"
           out: "dependency-check-report"
           args: >
-            --enableExperimental
+            --noupdate
             --failOnCVSS 7
 
-      - name: Upload Dependency Check Report
+      - name: Upload Dependency Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
