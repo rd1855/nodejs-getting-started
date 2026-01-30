@@ -1,54 +1,70 @@
-name: CI Security Pipeline
+name: pr-security-pipeline
 
 on:
-  push:
   pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
-  gitleaks:
-    name: Gitleaks Secret Scan
+  pr-security:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Get changed files
+        id: changes
+        uses: tj-actions/changed-files@v44
+
       - name: Run Gitleaks
+        if: steps.changes.outputs.any_changed == 'true'
+        timeout-minutes: 3
         uses: gitleaks/gitleaks-action@v2
         with:
           args: detect --source . --log-opts="--all"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  semgrep:
-    name: Semgrep Code Scan
-    runs-on: ubuntu-latest
-    needs: gitleaks
+      - name: Install Semgrep
+        if: steps.changes.outputs.any_changed == 'true'
+        timeout-minutes: 3
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install semgrep
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Run Semgrep on changed files
+        if: steps.changes.outputs.any_changed == 'true'
+        timeout-minutes: 5
+        run: |
+          semgrep scan \
+            --config p/javascript \
+            --sarif \
+            --output semgrep.sarif \
+            ${{ steps.changes.outputs.all_changed_files }}
 
-      - name: Run Semgrep
-        uses: returntocorp/semgrep-action@v1
+      - name: Upload SARIF report
+        if: steps.changes.outputs.any_changed == 'true'
+        uses: github/codeql-action/upload-sarif@v4
         with:
-          config: "p/javascript"
-
-  dependency-check:
-    name: OWASP Dependency Check
-    runs-on: ubuntu-latest
-    needs: semgrep
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+          sarif_file: semgrep.sarif
 
       - name: Run OWASP Dependency Check
+        if: steps.changes.outputs.any_changed == 'true'
+        timeout-minutes: 8
         uses: dependency-check/Dependency-Check_Action@main
         with:
-          project: "NodeJS DevSecOps Demo"
+          project: "PR-Dependency-Scan"
           path: "."
           format: "HTML"
           out: "dependency-check-report"
@@ -57,6 +73,7 @@ jobs:
             --failOnCVSS 7
 
       - name: Upload Dependency Check Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report
